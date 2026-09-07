@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+env/
+venv/
+.DS_Store
+
+# Archivos temporales y de bloqueo de Excel
+~$*.xlsx
+~$*.xlsm
+db/~$*
+
+# Archivos de salida generados (Se producen al ejecutar el script)
+db/Performance_VP_Retail_2026_FINAL.xlsx
+db/Performance_VP_Retail_2026_AUTONOMO.xlsx
+db/Performance_VP_Retail_2026_COMPLETO*.xlsx
+db/Performance_VP_Retail_2026_CON_FORMULAS.xlsx
+db/Performance_VP_Retail_2026_Generado*.xlsx
+db/Performance_VP_Retail_2026_Generated*.xlsx
+db/Performance_VP_Retail_2026_HIBRIDO.xlsx
+db/Performance_VP_Retail_2026_OPTIMIZADO.xlsx
+db/Performance_VP_Retail_2026_V1_TEMPLATE.xlsx
+db/Performance_VP_Retail_2026_v2_*.xlsx
+db/TEST_*.xlsx
+db/template_vacio.xlsx
