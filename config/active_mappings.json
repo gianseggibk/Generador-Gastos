@@ -1,0 +1,14 @@
+{
+  "fiscal_year": "2026",
+  "description": "Mapeos activos vigentes 1 a 1 para evitar preguntas recurrentes durante el año",
+  "sheet_overrides": {
+    "Performance TC 2026.xlsm": {
+      "otros": "Otros TC-->",
+      "otros tc": "Otros TC-->",
+      "consumo inicial": "Consumo Inicial",
+      "renta alta": "Renta_Alta",
+      "masivo": "Masivo",
+      "estado": "Estado"
+    }
+  }
+}

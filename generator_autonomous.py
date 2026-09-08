@@ -15,6 +15,7 @@ Arquitectura:
 """
 import os
 import sys
+import json
 import time
 import re
 import zipfile
@@ -26,6 +27,12 @@ from pathlib import Path
 import openpyxl
 from openpyxl import Workbook
 from openpyxl.utils import get_column_letter
+
+def get_base_dir() -> Path:
+    """Retorna la ruta base del proyecto, compatible con ejecutables (.exe) vía PyInstaller"""
+    if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
+        return Path(sys._MEIPASS)
+    return Path(__file__).resolve().parent
 
 class AutonomousConsolidatedGenerator:
     """Generador Autónomo de Consolidación Bancaria VP Retail"""
@@ -111,10 +118,11 @@ class AutonomousConsolidatedGenerator:
         'Performance Cuenta Sueldo_2026.xlsm': 'Performance Cta Sueldo.xlsx',
     }
 
-    def __init__(self, template_path=None, db_dir=None):
-        base_dir = Path(__file__).parent
+    def __init__(self, template_path=None, db_dir=None, overrides=None):
+        base_dir = get_base_dir()
         self.template_path = Path(template_path) if template_path else base_dir / "templates" / "vp_retail_master_template.xlsx"
         self.db_dir = Path(db_dir) if db_dir else base_dir / "db"
+        self.config_path = base_dir / "config" / "active_mappings.json"
         
         # Validar existencia de template
         if not self.template_path.exists():
@@ -122,6 +130,14 @@ class AutonomousConsolidatedGenerator:
             alt = self.db_dir / "Performance VP Retail 2026.xlsx"
             if alt.exists():
                 self.template_path = alt
+
+        # Cargar mapeos activos anuales y fusionar con overrides en caliente
+        self.sheet_overrides = self._load_active_mappings()
+        if overrides:
+            for fn, maps in overrides.items():
+                if fn not in self.sheet_overrides:
+                    self.sheet_overrides[fn] = {}
+                self.sheet_overrides[fn].update({self._normalize_name(k): v for k, v in maps.items()})
 
         self.sources_cache = {}
         self.loaded_workbooks = {}
@@ -134,6 +150,21 @@ class AutonomousConsolidatedGenerator:
             'formats_applied': 0,
             'cells_written': 0,
         }
+
+    def _load_active_mappings(self):
+        """Carga el mapeo anual activo vigente para ejecución desatendida"""
+        if hasattr(self, 'config_path') and self.config_path.exists():
+            try:
+                with open(self.config_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    raw_ovs = data.get("sheet_overrides", {})
+                    norm_ovs = {}
+                    for fn, mapping in raw_ovs.items():
+                        norm_ovs[fn] = {self._normalize_name(k): v for k, v in mapping.items()}
+                    return norm_ovs
+            except Exception as e:
+                print(f"  [Aviso] Error leyendo active_mappings.json: {e}")
+        return {}
 
     def _normalize_name(self, name):
         """Normaliza nombres eliminando acentos y espacios extra"""
@@ -196,6 +227,12 @@ class AutonomousConsolidatedGenerator:
 
         if not filename:
             return None
+
+        # Aplicar override de mapeo si existe para este archivo y hoja
+        if filename in self.sheet_overrides:
+            file_ovs = self.sheet_overrides[filename]
+            if sheet_clean in file_ovs:
+                sheet_clean = self._normalize_name(file_ovs[sheet_clean])
 
         file_path = self.db_dir / filename
         if not file_path.exists() and filename in self.FALLBACK_FILES:
