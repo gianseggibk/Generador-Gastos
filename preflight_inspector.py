@@ -65,6 +65,8 @@ class SegmentPreflightInspector:
         
         self.active_mappings = self._load_active_mappings()
         self.user_overrides = dict(self.active_mappings.get("sheet_overrides", {}))
+        self.custom_segments = dict(self.active_mappings.get("custom_segments", {}))
+        self.disabled_segments = list(self.active_mappings.get("disabled_segments", []))
 
     def _load_active_mappings(self) -> Dict[str, Any]:
         """Carga el mapeo anual activo vigente para no preguntar mes a mes"""
@@ -74,7 +76,7 @@ class SegmentPreflightInspector:
                     return json.load(f)
             except Exception:
                 pass
-        return {"fiscal_year": "2026", "sheet_overrides": {}}
+        return {"fiscal_year": "2026", "sheet_overrides": {}, "custom_segments": {}, "disabled_segments": []}
 
     def save_active_mappings(self):
         """Guarda el mapeo anual 1 a 1 de forma persistente y limpia"""
@@ -84,19 +86,87 @@ class SegmentPreflightInspector:
                 json.dump({
                     "fiscal_year": "2026",
                     "description": "Mapeos activos vigentes 1 a 1 para evitar preguntas recurrentes durante el año",
-                    "sheet_overrides": self.user_overrides
+                    "sheet_overrides": self.user_overrides,
+                    "custom_segments": self.custom_segments,
+                    "disabled_segments": self.disabled_segments
                 }, f, indent=2, ensure_ascii=False)
         except Exception as e:
-            print(f"  [Aviso] No se pudo guardar active_mappings.json: {e}")
+            print(f"  [AVISO] No se pudo guardar active_mappings.json: {e}")
 
     def reset_mappings(self):
         """Restablece los mapeos a valores de fábrica"""
         self.user_overrides = {}
+        self.custom_segments = {}
+        self.disabled_segments = []
         if self.config_path.exists():
             try:
                 self.config_path.unlink()
             except Exception:
                 pass
+
+    def get_all_segments(self) -> List[Dict[str, Any]]:
+        """Retorna todos los segmentos (canónicos y personalizados) con su estado actual"""
+        segments = []
+        # 1. Segmentos Canónicos
+        tc_overrides = self.user_overrides.get("Performance TC 2026.xlsm", {})
+        for name in self.CANONICAL_SEGMENTS:
+            mapped_sheet = tc_overrides.get(self._normalize(name), name)
+            is_active = name not in self.disabled_segments
+            segments.append({
+                "name": name,
+                "type": "CANONICAL",
+                "target_file": "Performance TC 2026.xlsm",
+                "mapped_sheet": mapped_sheet,
+                "is_active": is_active,
+                "can_delete": False
+            })
+
+        # 2. Segmentos Personalizados
+        for name, meta in self.custom_segments.items():
+            t_file = meta.get("target_file", "Performance TC 2026.xlsm")
+            f_overrides = self.user_overrides.get(t_file, {})
+            mapped_sheet = f_overrides.get(self._normalize(name), meta.get("source_sheet", name))
+            is_active = name not in self.disabled_segments
+            segments.append({
+                "name": name,
+                "type": "CUSTOM",
+                "target_file": t_file,
+                "mapped_sheet": mapped_sheet,
+                "template_clone": meta.get("template_clone", "RentaAlta"),
+                "is_active": is_active,
+                "can_delete": True
+            })
+
+        return segments
+
+    def add_segment(self, name: str, target_file: str, source_sheet: str, template_clone: str = "RentaAlta"):
+        """Registra un nuevo segmento y lo persiste"""
+        clean_name = name.strip()
+        self.custom_segments[clean_name] = {
+            "target_file": target_file,
+            "source_sheet": source_sheet,
+            "template_clone": template_clone
+        }
+        if target_file not in self.user_overrides:
+            self.user_overrides[target_file] = {}
+        self.user_overrides[target_file][self._normalize(clean_name)] = source_sheet
+        if clean_name in self.disabled_segments:
+            self.disabled_segments.remove(clean_name)
+        self.save_active_mappings()
+
+    def remove_segment(self, name: str):
+        """Elimina un segmento personalizado o desactiva uno canónico"""
+        clean_name = name.strip()
+        if clean_name in self.custom_segments:
+            del self.custom_segments[clean_name]
+            norm = self._normalize(clean_name)
+            for t_file in self.user_overrides:
+                if norm in self.user_overrides[t_file]:
+                    del self.user_overrides[t_file][norm]
+        else:
+            if clean_name not in self.disabled_segments:
+                self.disabled_segments.append(clean_name)
+        self.save_active_mappings()
 
     def _normalize(self, text: str) -> str:
         """Normalización Unicode robusta"""
@@ -226,19 +296,19 @@ class SegmentPreflightInspector:
     def run_interactive_cli(self):
         """Modo interactivo por consola con opción de guardar anual"""
         print("\n" + "="*76)
-        print("🔍 PRE-INSPECCIÓN DE SEGMENTOS (COMPATIBLE CON .EXE)")
+        print("[INFO] PRE-INSPECCION DE SEGMENTOS (SISTEMA AUTONOMO INTERBANK)")
         print("="*76)
 
         report = self.inspect()
 
         if report["ready_to_process"]:
-            print("  ✅ Todos los segmentos habituales fueron detectados o resueltos.")
-            print("  ✅ Mapeos anuales activos: OK.")
-            print("  ✅ El archivo está listo para compilarse en automático.\n")
+            print("  [OK] Todos los segmentos habituales fueron detectados o resueltos.")
+            print("  [OK] Mapeos anuales activos: OK.")
+            print("  [OK] El archivo esta listo para compilarse en automatico.\n")
             return self.user_overrides
 
-        print(f"\n⚠️  Estado: {report['summary_status']}")
-        print(f"Se detectaron {len(report['discrepancies'])} discrepancias que requieren confirmación:\n")
+        print(f"\n[AVISO] Estado: {report['summary_status']}")
+        print(f"Se detectaron {len(report['discrepancies'])} discrepancias que requieren confirmacion:\n")
 
         for idx, disc in enumerate(report["discrepancies"], 1):
             if disc["type"] == "SEGMENT_RENAMED_OR_MISSING":
@@ -247,15 +317,15 @@ class SegmentPreflightInspector:
                 tfile = disc["target_file"]
                 print(f"  [{idx}] Segmento oficial: '{seg}' no fue hallado con su nombre exacto en {tfile}.")
                 if sugg:
-                    print(f"      ¿Deseas mapearlo a la hoja sugerida: '{sugg}'?")
+                    print(f"      Deseas mapearlo a la hoja sugerida: '{sugg}'?")
                     resp = input(f"      Presiona [ENTER] para aceptar '{sugg}', o escribe otro nombre: ").strip()
                     chosen = resp if resp else sugg
-                    save_q = input("      ¿Guardar como mapeo activo para todo el año 2026? [S/n]: ").strip().lower()
+                    save_q = input("      Guardar como mapeo activo para todo el ano 2026? [S/n]: ").strip().lower()
                     save_ann = False if save_q == 'n' else True
                     self.apply_resolutions(tfile, seg, chosen, save_annual=save_ann)
 
         print("\n" + "="*76)
-        print("✅ Pre-inspección completada. Mapeos listos para el generador.")
+        print("[OK] Pre-inspeccion completada. Mapeos listos para el generador.")
         print("="*76 + "\n")
         return self.user_overrides
 

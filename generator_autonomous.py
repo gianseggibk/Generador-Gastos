@@ -337,13 +337,13 @@ class AutonomousConsolidatedGenerator:
 
         return None
 
-    def generate(self, output_path=None):
+    def generate(self, output_path=None, progress_callback=None):
         """Construye el libro completo consolidado con 100% fidelidad visual"""
         total_start = time.time()
         output_path = Path(output_path) if output_path else self.db_dir / "Performance_VP_Retail_2026_FINAL.xlsx"
 
         print("\n" + "="*72)
-        print("🚀 GENERADOR AUTÓNOMO UNIFICADO (PERFORMANCE VP RETAIL 2026)")
+        print("[INFO] GENERADOR AUTONOMO UNIFICADO (PERFORMANCE VP RETAIL 2026)")
         print("="*72)
         print(f"  Plantilla Maestra:   {self.template_path.name}")
         print(f"  Directorio Fuentes:  {self.db_dir.name}")
@@ -352,11 +352,15 @@ class AutonomousConsolidatedGenerator:
 
         # 1. Precargar metadatos estructurales (anchos de columna y celdas combinadas)
         print("Extrayendo metadata de anchos y celdas combinadas vía XML...")
+        if progress_callback:
+            progress_callback({'type': 'status', 'message': 'Extrayendo metadata estructural de la plantilla...'})
         self._preload_sheet_metadata()
         print(f"Metadata lista para {len(self.sheet_metadata)} hojas.\n")
 
         # 2. Abrir plantilla en modo streaming dual
         print("Iniciando lectura streaming de plantilla maestra...")
+        if progress_callback:
+            progress_callback({'type': 'status', 'message': 'Abriendo plantilla maestra en modo streaming...'})
         wb_formulas = openpyxl.load_workbook(self.template_path, data_only=False, read_only=True)
         wb_values = openpyxl.load_workbook(self.template_path, data_only=True, read_only=True)
 
@@ -365,6 +369,8 @@ class AutonomousConsolidatedGenerator:
 
         all_sheets = wb_formulas.sheetnames
         print(f"Procesando {len(all_sheets)} hojas completas...\n")
+        if progress_callback:
+            progress_callback({'type': 'start', 'total_sheets': len(all_sheets)})
 
         for idx, sheet_name in enumerate(all_sheets, 1):
             t_s = time.time()
@@ -426,6 +432,17 @@ class AutonomousConsolidatedGenerator:
             self.stats['sheets_generated'] += 1
             elapsed_sheet = time.time() - t_s
             print(f"  [{idx:02d}/{len(all_sheets):02d}] {sheet_name:<26} │ {row_idx-1:>5} filas │ {written_in_sheet:>7,} celdas │ {elapsed_sheet:>6.2f} s")
+            if progress_callback:
+                progress_callback({
+                    'type': 'sheet',
+                    'idx': idx,
+                    'total_sheets': len(all_sheets),
+                    'sheet_name': sheet_name,
+                    'rows': row_idx - 1,
+                    'cells': written_in_sheet,
+                    'elapsed': elapsed_sheet,
+                    'total_cells': self.stats['cells_written']
+                })
 
         wb_formulas.close()
         wb_values.close()
@@ -436,6 +453,8 @@ class AutonomousConsolidatedGenerator:
                 pass
 
         print(f"\nGuardando libro consolidado en {output_path.name}...")
+        if progress_callback:
+            progress_callback({'type': 'saving', 'message': f'Guardando libro consolidado en disco ({output_path.name})...'})
         t_save = time.time()
         wb_output.save(output_path)
         wb_output.close()
@@ -443,6 +462,17 @@ class AutonomousConsolidatedGenerator:
         total_time = time.time() - total_start
 
         file_size_mb = output_path.stat().st_size / (1024 * 1024)
+
+        result_dict = {
+            'success': True,
+            'total_time': total_time,
+            'file_size_mb': file_size_mb,
+            'output_path': str(output_path),
+            'stats': self.stats
+        }
+
+        if progress_callback:
+            progress_callback({'type': 'done', 'result': result_dict})
 
         print("\n" + "="*72)
         print("  RESUMEN FINAL: REPORTE GENERADO EXITOSAMENTE")
@@ -455,8 +485,8 @@ class AutonomousConsolidatedGenerator:
         print(f"  Estilos Flyweight:         {self.stats['formats_applied']:,}")
         print(f"  Tiempo guardado en disco:  {save_time:.2f} s")
         print("-"*72)
-        print(f"  ⏱️  TIEMPO TOTAL:            {total_time:.2f} s ({total_time/60:.2f} min)")
-        print(f"  💾 Archivo generado:       {output_path.name} ({file_size_mb:.2f} MB)")
+        print(f"  TIEMPO TOTAL:              {total_time:.2f} s ({total_time/60:.2f} min)")
+        print(f"  Archivo generado:          {output_path.name} ({file_size_mb:.2f} MB)")
         print("="*72 + "\n")
 
         return {
@@ -465,6 +495,115 @@ class AutonomousConsolidatedGenerator:
             'file_size_mb': file_size_mb,
             'stats': self.stats
         }
+
+    def generate_incremental(self, output_path=None, progress_callback=None):
+        """
+        MODO B: Actualización Incremental Rápida.
+        Si el archivo consolidado ya existe, actualiza únicamente los valores de las fuentes
+        sin reconstruir toda la estructura de formatos ni los 3.18 millones de celdas desde cero.
+        """
+        output_path = Path(output_path) if output_path else self.db_dir / "Performance_VP_Retail_2026_FINAL.xlsx"
+
+        if not output_path.exists():
+            if progress_callback:
+                progress_callback({
+                    'type': 'status',
+                    'message': '[AVISO] Consolidado previo no encontrado. Ejecutando Modo A (Completo)...'
+                })
+            return self.generate(output_path=output_path, progress_callback=progress_callback)
+
+        start_time = time.time()
+        print("\n" + "="*72)
+        print("[INFO] MODO B: ACTUALIZACION INCREMENTAL RAPIDA (INTERBANK)")
+        print("="*72)
+        print(f"  Archivo a actualizar: {output_path.name}")
+        print("="*72 + "\n")
+
+        if progress_callback:
+            progress_callback({'type': 'status', 'message': 'Cargando libro consolidado para actualizacion rápida...'})
+
+        # Cargar libro existente con openpyxl
+        wb = openpyxl.load_workbook(output_path, data_only=False)
+
+        # Determinar hojas a actualizar (segmentos e insumos clave)
+        target_sheets = [
+            'RentaAlta', 'Masivo', 'ConsumoInicial', 'Otros', 'Estado',
+            'Convenios', 'Vehicular', 'Préstamos', 'Adelanto', 'Hipotecario',
+            'Inmobiliaria', 'Captaciones', 'Cuenta Sueldo', 'Remesas', 'Fondos Mutuos'
+        ]
+        available_targets = [s for s in target_sheets if s in wb.sheetnames]
+
+        if progress_callback:
+            progress_callback({'type': 'start', 'total_sheets': len(available_targets)})
+
+        updated_cells_total = 0
+
+        for idx, sname in enumerate(available_targets, 1):
+            t0 = time.time()
+            ws_target = wb[sname]
+
+            sheet_data = self._get_source_sheet_data(None, sname)
+            cells_in_sheet = 0
+
+            if sheet_data:
+                for coord, val in sheet_data.items():
+                    target_cell = ws_target[coord]
+                    # En openpyxl, las celdas secundarias de un merge son MergedCell (de solo lectura)
+                    if type(target_cell).__name__ != 'MergedCell':
+                        # No sobreescribir si la celda destino es una fórmula
+                        if not (isinstance(target_cell.value, str) and target_cell.value.startswith('=')):
+                            target_cell.value = val
+                            cells_in_sheet += 1
+
+            elapsed = time.time() - t0
+            updated_cells_total += cells_in_sheet
+            print(f"  [{idx:02d}/{len(available_targets):02d}] {sname:<24} │ {cells_in_sheet:>6,} celdas actualizadas │ {elapsed:>5.2f} s")
+
+            if progress_callback:
+                progress_callback({
+                    'type': 'sheet',
+                    'idx': idx,
+                    'total_sheets': len(available_targets),
+                    'sheet_name': sname,
+                    'rows': ws_target.max_row or 0,
+                    'cells': cells_in_sheet,
+                    'elapsed': elapsed,
+                    'total_cells': updated_cells_total
+                })
+
+        if progress_callback:
+            progress_callback({'type': 'saving', 'message': f'Guardando consolidado actualizado ({output_path.name})...'})
+
+        wb.save(output_path)
+        wb.close()
+
+        total_time = time.time() - start_time
+        file_size_mb = output_path.stat().st_size / (1024 * 1024)
+
+        result_dict = {
+            'success': True,
+            'mode': 'INCREMENTAL',
+            'total_time': total_time,
+            'file_size_mb': file_size_mb,
+            'output_path': str(output_path),
+            'stats': {
+                'sheets_generated': len(available_targets),
+                'cells_written': updated_cells_total
+            }
+        }
+
+        if progress_callback:
+            progress_callback({'type': 'done', 'result': result_dict})
+
+        print("\n" + "="*72)
+        print("  [OK] ACTUALIZACION INCREMENTAL COMPLETADA")
+        print(f"  Hojas actualizadas:  {len(available_targets)}")
+        print(f"  Celdas refrescadas:  {updated_cells_total:,}")
+        print(f"  Tiempo total:        {total_time:.2f} s")
+        print(f"  Archivo:             {output_path.name} ({file_size_mb:.2f} MB)")
+        print("="*72 + "\n")
+
+        return result_dict
 
 def main():
     parser = argparse.ArgumentParser(description="Generador Autónomo de Consolidado VP Retail 2026")

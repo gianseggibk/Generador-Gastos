@@ -10,5 +10,7 @@
       "masivo": "Masivo",
       "estado": "Estado"
     }
-  }
+  },
+  "custom_segments": {},
+  "disabled_segments": []
 }
